@@ -20,7 +20,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     try {
         const existingUser = await query(
-            'SELECT * FROM users WHERE username = $1 OR email = $2',
+            'SELECT * FROM public.users WHERE username = $1 OR email = $2',
             [username, email]
         );
 
@@ -31,7 +31,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const passwordHash = await bcrypt.hash(password, 10);
 
         const result = await query(
-            'INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id, username, email, created_at',
+            'INSERT INTO public.users (username, email, password) VALUES ($1, $2, $3) RETURNING id, username, email, created_at',
             [username, email, passwordHash]
         );
 
