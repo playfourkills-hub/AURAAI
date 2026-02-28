@@ -1,107 +1,34 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
-import Groq from 'groq-sdk';
-import { getUserFromRequest } from '../../../lib/auth';
-import { query } from '../../../lib/db';
+import type { NextApiRequest, NextApiResponse } from "next";
+import OpenAI from "openai";
 
-const groq = new Groq({
-    apiKey: process.env.GROQ_API_KEY
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-    if (req.method !== 'POST') {
-        return res.status(405).json({ error: 'Method not allowed' });
-    }
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
+  try {
+    const { message } = req.body;
 
-    const user = getUserFromRequest(req);
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "user", content: message }
+      ],
+    });
 
-    if (!user) {
-        return res.status(401).json({ error: 'Unauthorized' });
-    }
+    res.status(200).json({
+      message: completion.choices[0].message.content,
+      response_time: 0
+    });
 
-    const { sessionId, message, image } = req.body;
-
-    if (!sessionId || (!message && !image)) {
-        return res.status(400).json({ error: 'Session ID and message/image are required' });
-    }
-
-    try {
-        let finalMessage = message;
-
-        // processing image with OpenRouter if present
-        if (image) {
-            try {
-                const openRouterRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${process.env.OPENROUTER_API}`,
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        model: 'allenai/molmo-2-8b:free',
-                        messages: [
-                            {
-                                role: 'user',
-                                content: [
-                                    { type: 'text', text: 'Describe this image in detail.' },
-                                    { type: 'image_url', image_url: { url: image } }
-                                ]
-                            }
-                        ]
-                    })
-                });
-
-                if (openRouterRes.ok) {
-                    const data = await openRouterRes.json();
-                    const description = data.choices?.[0]?.message?.content;
-                    if (description) {
-                        finalMessage = `${message}\n\n[System: User uploaded an image. Image Description: ${description}]`;
-                    }
-                }
-            } catch (imageError) {
-                console.error('Failed to analyze image:', imageError);
-                // Continue without description if fails
-            }
-        }
-
-        const sessionResult = await query(
-            'SELECT * FROM chat_sessions WHERE id = $1 AND user_id = $2',
-            [sessionId, user.id]
-        );
-
-        if (sessionResult.rows.length === 0) {
-            return res.status(404).json({ error: 'Session not found' });
-        }
-
-        // Save original message to DB (without big description to keep it clean for user, or with it? 
-        // Usually better to save what user typed + indicator)
-        // actually for history context we need the description. 
-        // But for display we might want just "Image Uploaded".
-        // Let's save the augmented message for now so context persists.
-        // OR better: save the user input, but use augmented message for AI generation.
-        // The issue is future turns won't have the context if we don't save it.
-        // So we will save the augmented message to DB.
-
-        // Wait, the user sees this message. If I replace it with description, it looks weird.
-        // Best approach: Save what user typed. When constructing history for Groq, inject the description.
-        // BUT, if we reload the chat, we lose the description if we don't save it.
-        // So we MUST save the description if we want memory.
-        // Let's append it to the content stored.
-
-        await query(
-            'INSERT INTO messages (session_id, role, content) VALUES ($1, $2, $3)',
-            [sessionId, 'user', finalMessage]
-        );
-
-        const messagesResult = await query(
-            'SELECT role, content FROM messages WHERE session_id = $1 ORDER BY created_at ASC',
-            [sessionId]
-        );
-
-        const chatHistory = messagesResult.rows.map((msg: any) => ({
-            role: msg.role,
-            content: msg.content
-        }));
-
+  } catch (error) {
+    console.error("Chat error:", error);
+    res.status(500).json({ error: "AI failed" });
+  }
+}
         const startTime = Date.now();
         const completion = await groq.chat.completions.create({
             messages: chatHistory,
@@ -178,3 +105,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         res.status(500).json({ error: 'Failed to process message' });
     }
 }
+
